@@ -2,7 +2,29 @@
 
 An OpenCode-style terminal frontend powered by Pi. The expanded interface follows the supplied screenshot and OpenCode 2.0.32. It runs separately from Pi's normal TUI.
 
-## Run on this machine
+## Install on Windows
+
+Install Bun 1.3.14+, Node.js/npm, Git, and Pi first. Configure your provider/model in Pi, then:
+
+```powershell
+git clone https://github.com/ImbeinBulied/pi-workbench.git
+cd pi-workbench
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+The installer restores the locked dependencies and registers a per-user `piw` launcher under `%LOCALAPPDATA%\Programs\PiWorkbench\bin`, adding that directory to your user PATH once. Reopen your terminal after installation. Keep the checkout in place: the launcher points to it. Rerun the installer after moving the checkout. For an offline launcher refresh, use `-SkipDependencies`; `-NoPath -InstallDirectory C:/your/bin` creates a launcher without changing PATH.
+
+```powershell
+piw doctor
+cd C:/path/to/your/project
+piw
+```
+
+`piw doctor` checks Bun compatibility and Pi launcher availability without starting Pi or opening the TUI. It checks for optional Pi settings/authentication, OpenCode usage-card configuration, and the DeepSeek tracker by file presence only. It never reads or prints credentials and does not verify model access, provider connectivity, or the contents of those files. Missing optional files do not cause a failure; missing Bun compatibility or Pi does.
+
+Usage cards and DeepSeek pricing reuse your existing local OpenCode/DSH setup. Their configuration, credentials, and external tracker are not bundled. The rest of the UI works without those integrations. On macOS/Linux, restore with `npm ci` and run `bun src/cli.ts` from your project, using an absolute path to the checkout entry point.
+
+## Run
 
 The global shortcut is `piw`. Run it inside a project folder, or pass a folder:
 
@@ -23,11 +45,11 @@ Open PowerShell in this directory:
 Or run with Bun directly:
 
 ```powershell
-bun src/main.ts --demo
-bun src/main.ts C:/path/to/your/project
+bun src/cli.ts --demo
+bun src/cli.ts C:/path/to/your/project
 ```
 
-Dependencies are installed here. To restore them, run `npm ci`. Use Bun 1.3.14+ to run the app (verified with 1.4.3 on Windows x64). Node 24 can install packages, but cannot run this OpenTUI version.
+To restore dependencies, run `npm ci`. Use Bun 1.3.14+ to run the app (verified with 1.4.3 on Windows x64). Node 24 can install packages, but cannot run this OpenTUI version.
 
 Live mode launches Pi through its managed wrapper at `~/.pi/agent/bin/pi-launcher.js`, which resolves Pi's current release every time PiW starts or reconnects. Updating Pi therefore needs no PiW rebuild or reinstall. If Pi is updated while PiW is already open, run `/reload` or restart PiW to reconnect with the new release; a running Pi process cannot switch versions in place. On other setups set `PI_CLI_PATH` to Pi's JavaScript CLI entry point or native executable. Unix also supports `pi` on PATH. Configure credentials and your preferred model through Pi itself before using live mode. Your existing Pi tools and extensions run with their normal permissions in the selected project folder.
 
@@ -73,7 +95,7 @@ See [the parity inventory](docs/feature-inventory.md) for the implementation and
 
 ## Verification
 
-`bun test` covers protocol/state, command dispatch, session-operation races, native keyboard/render behavior, searchable and scrollable dialogs, Markdown, file references/session fixtures, shutdown, and a read-only request to installed Pi. The integration test requires Pi and access to its settings locks. It does not send a model prompt.
+`bun test` covers protocol/state, command dispatch, session-operation races, native keyboard/render behavior, dialogs, Markdown, file references/session fixtures, shutdown, and setup/doctor behavior. It does not require an installed Pi or access to your Pi settings locks. The separate `bun run test:integration` starts installed Pi and makes a read-only RPC request; it requires Pi and access to its settings locks and does not send a model prompt.
 
 `npm run check` checks TypeScript. `bun run preview` captures wide and narrow native render frames as SVG and text, using clearly marked sample content.
 
