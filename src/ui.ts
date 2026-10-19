@@ -118,8 +118,10 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
   let savedDraft: string | undefined;
   const history: string[] = [];
   let historyIndex = 0, historyDraft = '', slashIndex = 0, leader = false, sidebarVisible = true;
-  let contentSignature = '', tabSignature = '', terminalTitle = '';
+  let tabSignature = '', terminalTitle = '';
   const expanded = new Set<string>();
+  const messageRows: { values: unknown[]; box: BoxRenderable; markdown?: MarkdownRenderable }[] = [];
+  let renderedSession = state.sessionId;
   const root = new BoxRenderable(renderer, { width: '100%', height: '100%', backgroundColor: colors.bg, flexDirection: 'column' }); renderer.root.add(root);
   const tabs = new BoxRenderable(renderer, { height: 2, flexDirection: 'row', paddingLeft: 2, backgroundColor: colors.panel }); root.add(tabs);
   const body = new BoxRenderable(renderer, { flexGrow: 1, minHeight: 0, flexDirection: 'row' }); root.add(body);
@@ -265,11 +267,11 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
     completion.content = commands.slice(slashIndex, slashIndex + 4).map((command, i) => `${i === 0 ? '›' : ' '} /${command.name}  ${command.description}`).join('\n');
   }
   function addText(parent: BoxRenderable | ScrollBoxRenderable, content: string, muted = false) { parent.add(new TextRenderable(renderer, { content, fg: muted ? colors.muted : colors.text, wrapMode: 'word', flexShrink: 0 })); }
-  function addTools(index: number) {
-    state.tools.filter(tool => (tool.messageIndex ?? state.messages.length - 1) === index).forEach(tool => {
-      const box = new BoxRenderable(renderer, { flexDirection: 'column', flexShrink: 0, paddingLeft: 1 }); scroll.add(box);
+  function addTools(parent: BoxRenderable, tools: State['tools']) {
+    tools.forEach(tool => {
+      const box = new BoxRenderable(renderer, { flexDirection: 'column', flexShrink: 0, paddingLeft: 1 }); parent.add(box);
       const open = state.showDetails || expanded.has(tool.id);
-      box.add(new TextRenderable(renderer, { content: `${open ? '▾' : '▸'} ${tool.status === 'running' ? '…' : tool.status === 'error' ? '!' : '✓'} ${tool.name}  ${tool.detail}`, fg: colors.muted, wrapMode: 'word', onMouseDown: () => { expanded.has(tool.id) ? expanded.delete(tool.id) : expanded.add(tool.id); contentSignature = ''; update(); } }));
+      box.add(new TextRenderable(renderer, { content: `${open ? '▾' : '▸'} ${tool.status === 'running' ? '…' : tool.status === 'error' ? '!' : '✓'} ${tool.name}  ${tool.detail}`, fg: colors.muted, wrapMode: 'word', onMouseDown: () => { expanded.has(tool.id) ? expanded.delete(tool.id) : expanded.add(tool.id); update(); } }));
       if (open && (tool.output || tool.diff)) addText(box, [tool.output, tool.diff].filter(Boolean).join('\n'), true);
     });
   }
@@ -300,9 +302,9 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
         const label = active ? state.session : tab.name;
         const tabView = new BoxRenderable(renderer, { height: 1, flexDirection: 'row', backgroundColor: active ? colors.input : colors.panel });
         tabView.add(new TextRenderable(renderer, {
-          content: ` ${label} `, fg: active ? colors.accent : colors.muted,
+          content: ` ${tab.attention ? '! ' : tab.busy ? '… ' : tab.unread ? '• ' : ''}${label} `, fg: active ? colors.accent : colors.muted,
           bg: active ? colors.input : colors.panel,
-          onMouseDown: () => { if (tab.path && !active) actions.action('tab:' + tab.path); },
+          onMouseDown: () => { if (!active) actions.action(tab.path ? 'tab:' + tab.path : 'tab-id:' + tab.id); },
         }));
         tabView.add(new TextRenderable(renderer, {
           content: '×', fg: colors.muted, bg: active ? colors.input : colors.panel,
@@ -312,14 +314,40 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
       });
       tabs.add(new TextRenderable(renderer, { content: ' + ', fg: colors.accent, onMouseDown: () => actions.action('new') }));
     }
-    const signature = JSON.stringify([state.messages, state.tools, state.showThinking, state.showDetails, state.busy, state.theme]);
-    if (signature !== contentSignature) {
-      contentSignature = signature; scroll.getChildren().forEach(child => child.destroyRecursively());
-      if (!state.messages.length) { addText(scroll, 'pi workbench\n\nWhat are we building?\nAsk about your code, investigate a bug, or make a change.', true); addTools(-1); }
+    if (renderedSession !== state.sessionId) {
+      messageRows.splice(0).forEach(row => row.box.destroyRecursively());
+      renderedSession = state.sessionId;
+    }
+    const groupedTools = new Map<number, State['tools']>();
+    for (const tool of state.tools) {
+      const index = tool.messageIndex ?? state.messages.length - 1;
+      const group = groupedTools.get(index) ?? [];
+      group.push(tool); groupedTools.set(index, group);
+    }
+    const rowCount = Math.max(1, state.messages.length);
+    while (messageRows.length > rowCount) messageRows.pop()?.box.destroyRecursively();
+    {
       const conversationBlue = state.theme === 'dark' ? '#8ba5bd' : colors.accent;
-      state.messages.forEach((message, index) => {
+      for (let index = 0; index < rowCount; index++) {
+        const message = state.messages[index];
+        const tools = groupedTools.get(message ? index : -1) ?? [];
+        const values = [message?.role, message?.text, message?.thinking, message?.model, message?.provider, message?.durationMs, message?.outputTokens,
+          state.showThinking, state.showDetails, state.theme, message?.model ? '' : state.model,
+          message?.role === 'assistant' && (!message.text || index === state.active) ? state.busy : false,
+          ...tools.flatMap(tool => [tool.id, tool.name, tool.detail, tool.status, tool.output, tool.diff, expanded.has(tool.id)])];
+        const previous = messageRows[index];
+        if (previous && previous.values.length === values.length && values.every((value, i) => value === previous.values[i])) continue;
+        if (previous?.markdown && previous.values.length === values.length && values.every((value, i) => i === 1 || value === previous.values[i])) {
+          previous.markdown.content = normalizePipeTables(message?.text || (state.busy ? 'Thinking…' : ''));
+          previous.values = values;
+          continue;
+        }
+        const row = previous?.box ?? new BoxRenderable(renderer, { flexDirection: 'column', flexShrink: 0 });
+        if (previous) row.getChildren().forEach(child => child.destroyRecursively()); else scroll.add(row);
+        messageRows[index] = { values, box: row };
+        if (!message) { addText(row, 'pi workbench\n\nWhat are we building?\nAsk about your code, investigate a bug, or make a change.', true); addTools(row, tools); continue; }
         const isUser = message.role === 'user';
-        const box = new BoxRenderable(renderer, { flexDirection: 'column', flexShrink: 0, paddingY: 1, paddingX: isUser ? 2 : 0, backgroundColor: isUser ? colors.panel : colors.bg, border: isUser ? ['left'] : [], borderColor: isUser ? conversationBlue : colors.accent }); scroll.add(box);
+        const box = new BoxRenderable(renderer, { flexDirection: 'column', flexShrink: 0, paddingY: 1, paddingX: isUser ? 2 : 0, backgroundColor: isUser ? colors.panel : colors.bg, border: isUser ? ['left'] : [], borderColor: isUser ? conversationBlue : colors.accent }); row.add(box);
         if (isUser) {
           box.add(new TextRenderable(renderer, {
             content: message.text, fg: colors.text, wrapMode: 'word', flexShrink: 0,
@@ -334,7 +362,7 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
             if (heading) box.add(new TextRenderable(renderer, { content: new StyledText([bold(fg(colors.muted)({ __isChunk: true, text: heading }))]), fg: colors.muted, wrapMode: 'word', flexShrink: 0 }));
             if (body.length) addText(box, body.join('\n'), true);
           }
-          box.add(new MarkdownRenderable(renderer, {
+          const markdown = new MarkdownRenderable(renderer, {
             content: normalizePipeTables(message.text || (state.busy ? 'Thinking…' : '')), syntaxStyle, fg: colors.text, flexShrink: 0, internalBlockMode: 'top-level', conceal: true, streaming: state.busy && index === state.active,
             tableOptions: { style: 'grid', widthMode: 'content', wrapMode: 'word', cellPaddingX: 1, borders: true, borderColor: colors.muted },
             renderNode: token => {
@@ -345,12 +373,15 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
               }
               return undefined;
             },
-          }));
+          });
+          box.add(markdown);
+          const record = messageRows[index];
+          if (record) record.markdown = markdown;
           const metadata = [message.model || state.model, message.durationMs === undefined ? '' : `${(message.durationMs / 1000).toFixed(1)}s`, message.outputTokens === undefined ? '' : `${message.outputTokens} tokens`, message.outputTokens !== undefined && message.durationMs !== undefined && message.durationMs > 0 ? `${(message.outputTokens * 1000 / message.durationMs).toFixed(1)} tok/s` : ''].filter(Boolean).join(' · ');
           box.add(new TextRenderable(renderer, { content: new StyledText([fg(conversationBlue)({ __isChunk: true, text: 'Build' }), fg(colors.muted)({ __isChunk: true, text: ` · ${metadata}` })]), fg: colors.muted, wrapMode: 'word', flexShrink: 0 }));
         }
-        addTools(index);
-      });
+        addTools(row, tools);
+      }
     }
     model.content = `${state.model} · ${state.provider || 'provider unavailable'} · ${state.thinking || 'off'}${state.pendingCount ? ` · ${state.pendingCount} queued` : ''}`;
     status.content = state.error || state.notice || (state.busy ? 'Working · Esc cancel · draft retained' : 'Enter send · Shift+Enter newline · Ctrl+P commands'); status.fg = state.error ? colors.error : colors.muted;
@@ -413,7 +444,7 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
     const fileMatch = /(?:^|\s)@([^\s"']*)$/.exec(editor.plainText);
     if (key.name === 'tab' && fileMatch) { const file = files.find(path => path.toLowerCase().startsWith((fileMatch[1] ?? '').toLowerCase())); if (file) { key.preventDefault(); editor.setText(editor.plainText.replace(/@[^\s"']*$/, '@' + (file.includes(' ') ? JSON.stringify(file) : file))); } return; }
     if (key.ctrl && key.name === 'x') { key.preventDefault(); leader = true; return; }
-    if (key.ctrl && key.name === 'tab') { key.preventDefault(); if (!state.tabs.length) return; const index = state.tabs.findIndex(tab => tab.id === state.sessionId); const tab = state.tabs[(index + 1) % state.tabs.length]; if (tab?.path && tab.id !== state.sessionId) actions.action('tab:' + tab.path); return; }
+    if (key.ctrl && key.name === 'tab') { key.preventDefault(); if (!state.tabs.length) return; const index = state.tabs.findIndex(tab => tab.id === state.sessionId); const tab = state.tabs[(index + 1) % state.tabs.length]; if (tab && tab.id !== state.sessionId) actions.action(tab.path ? 'tab:' + tab.path : 'tab-id:' + tab.id); return; }
     if (key.ctrl && ['b', 'n', 'p', 't'].includes(key.name)) { key.preventDefault(); if (key.name === 'b') { sidebarVisible = !sidebarVisible; update(); } else actions.action(({ n: 'new', p: 'commands', t: 'thinking' })[key.name] ?? ''); return; }
     if (state.inputMode === 'dialog') { if (key.name === 'escape') { key.preventDefault(); actions.action('abort'); } return; }
     const matches = slashMatches();
@@ -427,6 +458,15 @@ export function mount(renderer: CliRenderer, state: State, actions: Actions) {
   });
   editor.focus(); update();
   return {
+    setState(next: State, draft: string, scrollTop = 0) {
+      closePicker(); state = next; expanded.clear();
+      messageRows.splice(0).forEach(row => row.box.destroyRecursively());
+      renderedSession = state.sessionId; tabSignature = '';
+      editor.setText(draft); update();
+      setTimeout(() => { if (!scroll.isDestroyed && state === next) { scroll.scrollTop = scrollTop; syncLatest(); } }, 0);
+    },
+    get scrollTop() { return scroll.scrollTop; },
+    get canSwitch() { return !picker && !overlay.visible && state.inputMode !== 'dialog'; },
     editor, update, setFiles(value: string[]) { files = value; }, closePicker,
     choose(title: string, items: Choice[], onPick: (value: string) => void, onCancel?: () => void, onHover?: (value: string) => void) { const draft = picker?.draft ?? editor.plainText; if (picker) closePicker(); picker = { title, items, onPick, onCancel, onHover, index: 0, draft }; editor.setText(''); overlay.visible = true; updatePicker(); editor.focus(); },
     showText(title: string, text: string) { closePicker(); editor.blur(); overlay.visible = true; overlaySize(); overlayText.content = `${title}\n\n${text}\n\nEsc close`; overlayScroll.scrollTop = 0; },

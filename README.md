@@ -85,7 +85,7 @@ The sidebar hides below 90 columns and stays fixed without its own scrollbar. It
 
 Type `/` for autocomplete, or Ctrl+P for the command palette. All 24 installed Pi built-ins and Workbench commands are listed once, together with dynamically discovered extension commands, skills, and templates. Extensions override same-named Pi built-ins. On this machine the read-only probe found 39 models and 51 dynamic commands; the app reloads the actual list at startup.
 
-`/model` opens a searchable picker grouped by provider; `/model provider/model-id` selects directly. `/sessions` lists saved sessions for this project; `/resume` remains an unlisted compatibility spelling. `/new`, `/clone`, `/fork`, `/name`, `/session`, `/compact`, `/thinking`, `/settings`, `/copy`, `/export`, and `/import` have frontend handlers. Session tabs switch real persisted Pi sessions. To resume a known file on launch use `./start.ps1 -Project C:/project -Session C:/path/session.jsonl`.
+`/model` opens a searchable picker grouped by provider; `/model provider/model-id` selects directly. `/sessions` lists saved sessions for this project; `/resume` remains an unlisted compatibility spelling. `/new`, `/clone`, `/fork`, `/name`, `/session`, `/compact`, `/thinking`, `/settings`, `/copy`, `/export`, and `/import` have frontend handlers. Each open session tab owns an independent Pi process, so you can start a run and switch tabs or open another session while it continues. Tabs show `…` for running, `•` for unread output, and `!` for a pending dialog. Each tab retains its draft and scroll position; a background extension question waits for its tab. Cancel a running session before closing its tab. Empty tabs close automatically when you open another session, unless they contain an unsent draft. To resume a known file on launch use `./start.ps1 -Project C:/project -Session C:/path/session.jsonl`.
 
 `/login`, `/logout`, `/trust`, `/share`, `/bug`, `/scoped-models`, `/changelog`, and `/tree` offer native Pi in the same terminal, with the requested command prefilled. Press Enter there to run it; `/quit` returns to Workbench and reloads the session. `/reload` restarts the Pi connection against the current saved session. `/native` opens native Pi directly. Native-only command strings are never sent to a model.
 
@@ -93,9 +93,11 @@ Type `/` for autocomplete, or Ctrl+P for the command palette. All 24 installed P
 
 See [the parity inventory](docs/feature-inventory.md) for the implementation and backend boundaries.
 
+Streaming text/tool deltas are reduced immediately and redraws are batched at 16 ms. Unchanged message rows and the active Markdown renderer are reused. Already-unread background output does not redraw the active conversation unless its tab status changes. Usage-card polling runs only for the foreground session. Full conversation virtualization is not implemented.
+
 ## Verification
 
-`bun test` covers protocol/state, command dispatch, session-operation races, native keyboard/render behavior, dialogs, Markdown, file references/session fixtures, shutdown, and setup/doctor behavior. It does not require an installed Pi or access to your Pi settings locks. The separate `bun run test:integration` starts installed Pi and makes a read-only RPC request; it requires Pi and access to its settings locks and does not send a model prompt.
+`bun test` covers protocol/state, command dispatch, session-operation races, native keyboard/render behavior, dialogs, Markdown, file references/session fixtures, shutdown, and setup/doctor behavior. It does not require an installed Pi or access to your Pi settings locks. The separate `bun run test:integration` starts installed Pi and makes read-only RPC requests, including checking independent session IDs for two concurrent Pi processes; it requires Pi and access to its settings locks and does not send a model prompt.
 
 `npm run check` checks TypeScript. `bun run preview` captures wide and narrow native render frames as SVG and text, using clearly marked sample content.
 

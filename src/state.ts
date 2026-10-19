@@ -36,7 +36,7 @@ export interface State {
   deepseekPeak: { label: string; next: string; inPeak: boolean } | null;
   usageCards: { id: string; label: string; headline: string; percent?: number; details: string[]; updatedAt: string; error?: boolean }[];
   commands: { name: string; description: string; source: string }[];
-  tabs: { id: string; name: string; path: string }[];
+  tabs: { id: string; name: string; path: string; busy?: boolean; unread?: boolean; attention?: boolean }[];
   sessionId: string;
   sessionFile: string;
   workspaceBranch: string;

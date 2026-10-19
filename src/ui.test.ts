@@ -544,3 +544,47 @@ test('mouse wheel scrolls multiple rows and the latest control returns to the bo
     expect(latestFrame).not.toContain('↓ Latest');
   } finally { await screen.dispose(); }
 });
+
+test('streaming preserves completed message render nodes', async () => {
+  const screen = await createTestRenderer({ width: 100, height: 30 });
+  const state = initialState();
+  state.messages = [{ role: 'user', text: 'Retain this message' }, { role: 'assistant', text: 'Streaming' }];
+  state.busy = true; state.active = 1;
+  const ui = mount(screen.renderer, state, { cwd: 'C:/project', demo: true, submit: () => {}, action: () => {} });
+  try {
+    await screen.renderOnce();
+    const root = screen.renderer.root.getChildren()[0];
+    const body = root?.getChildren()[1];
+    const main = body?.getChildren()[0];
+    const conversation = main?.getChildren()[0];
+    const firstRow = conversation?.getChildren()[0]?.getChildren()[0];
+    expect(firstRow).toBeDefined();
+    const activeMarkdown = conversation?.getChildren()[1]?.getChildren()[0]?.getChildren()[0];
+    expect(activeMarkdown).toBeDefined();
+    state.messages[1]!.text += ' more text';
+    ui.update();
+    await screen.renderOnce();
+    expect(conversation?.getChildren()[0]?.getChildren()[0] === firstRow).toBe(true);
+    expect(conversation?.getChildren()[1]?.getChildren()[0]?.getChildren()[0] === activeMarkdown).toBe(true);
+    expect(screen.captureCharFrame()).toContain('Streaming more text');
+  } finally { await screen.dispose(); }
+});
+
+test('session surfaces restore their own scroll position and draft', async () => {
+  const screen = await createTestRenderer({ width: 120, height: 32 });
+  const first = initialState(); first.sessionId = 'first';
+  first.messages = Array.from({ length: 35 }, (_, index) => ({ role: 'user' as const, text: `History ${index}` }));
+  const ui = mount(screen.renderer, first, { cwd: 'C:/project', demo: true, submit: () => {}, action: () => {} });
+  try {
+    await screen.renderOnce(); await screen.mockMouse.scroll(10, 8, 'up'); await screen.renderOnce();
+    const offset = ui.scrollTop;
+    expect(offset).toBeGreaterThan(0);
+    const second = initialState(); second.sessionId = 'second';
+    ui.setState(second, 'second draft'); await screen.renderOnce(); await Bun.sleep(10);
+    expect(ui.editor.plainText).toBe('second draft');
+    ui.setState(first, 'first draft', offset); await screen.renderOnce(); await Bun.sleep(10); await screen.renderOnce();
+    expect(ui.editor.plainText).toBe('first draft');
+    expect(ui.scrollTop).toBe(offset);
+    expect(screen.captureCharFrame()).toContain('↓ Latest');
+  } finally { await screen.dispose(); }
+});

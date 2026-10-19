@@ -6,8 +6,8 @@ Compared against installed OpenCode **2.0.32**, the supplied screenshot, [curren
 
 | Surface | Result |
 | --- | --- |
-| Session tabs and project/branch footer | Implemented; actual Pi session paths, mouse/keyboard switching |
-| User prompt panels and assistant transcript | Implemented; rendered Markdown, links, lists, code, reasoning visibility |
+| Session tabs and project/branch footer | Implemented; independent per-tab Pi processes, concurrent runs, mouse/keyboard switching, busy/unread/dialog indicators, retained drafts and scroll positions |
+| User prompt panels and assistant transcript | Implemented; rendered Markdown, links, lists, code, reasoning visibility; batched streaming redraws and retained message/Markdown nodes |
 | Response model/duration/tokens/rate | Implemented from backend metadata and local monotonic timing; no invented historical duration |
 | Tool activity/output/diffs | Interleaved by message, expandable; full language-aware diff highlighting remains absent |
 | Composer | Multiline, history, draft preservation, file/slash completion, steering queue |

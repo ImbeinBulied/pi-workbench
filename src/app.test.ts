@@ -251,3 +251,32 @@ test('a session change during file expansion cannot redirect the submitted promp
   expect(await outcome).toContain('session');
   expect(f.calls.some(x => x.type === 'prompt')).toBe(false);
 });
+
+ test('streaming deltas update state immediately but batch redraws and flush final messages', async () => {
+  const f = fixture();
+  await f.app.start();
+  let renders = 0;
+  const surface: Surface = { editor: { plainText: '', setText() {} }, update() { renders++; }, choose() {}, showText() {}, toggle() {}, openDialog() {}, closeDialog() {} };
+  f.app.replaceSurface(surface);
+  f.app.event({ type: 'message_start', message: { role: 'assistant', content: [] } });
+  renders = 0;
+  for (let i = 0; i < 100; i++) f.app.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'x' } });
+  expect(f.state.messages.at(-1)?.text).toBe('x'.repeat(100));
+  expect(renders).toBe(0);
+  await Bun.sleep(35);
+  expect(renders).toBe(1);
+  f.app.event({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'y' } });
+  f.app.event({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'final' }] } });
+  expect(renders).toBe(2);
+  await f.app.action('quit');
+  await Bun.sleep(35);
+  expect(renders).toBe(2);
+ });
+
+test('a new independent backend inherits the selected model and thinking level', async () => {
+  const f = fixture();
+  await f.app.start({ model: 'two', provider: 'test', thinking: 'high' });
+  expect(f.calls.find(call => call.type === 'set_model')?.fields).toEqual({ provider: 'test', modelId: 'two' });
+  expect(f.calls.find(call => call.type === 'set_thinking_level')?.fields).toEqual({ level: 'high' });
+  await f.app.action('quit');
+});

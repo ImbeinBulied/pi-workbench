@@ -90,10 +90,15 @@ interface Host {
   native(command: string): Promise<void>;
   editor(text: string): Promise<string>;
   reload?(sessionFile: string): Promise<void>;
+  openSession?(path?: string, name?: string): Promise<void>;
+  closeTab?(id: string): Promise<void>;
+  activateTab?(id: string): void;
 }
 export class Workbench {
   private stopped = false;
   private surfacePaused = false;
+  private renderTimer: ReturnType<typeof setTimeout> | undefined;
+  private foreground = true;
   private transport: Transport | undefined;
   private discovered: Command[] = [];
   private ready: boolean;
@@ -109,7 +114,13 @@ export class Workbench {
   attach(transport: Transport) { this.transport = transport; }
   pauseSurface() { this.surfacePaused = true; this.stopUsagePolling(); }
   replaceSurface(surface: Surface) { this.ui = surface; this.surfacePaused = false; if (this.ready) this.startUsagePolling(); }
-  private update() { if (!this.stopped && !this.surfacePaused) this.ui.update(); }
+  private update() { clearTimeout(this.renderTimer); this.renderTimer = undefined; if (!this.stopped && !this.surfacePaused) this.ui.update(); }
+  private scheduleUpdate() {
+    if (!this.renderTimer && !this.stopped && !this.surfacePaused) this.renderTimer = setTimeout(() => this.update(), 16);
+  }
+  get canLeave() { return !this.dialog && !this.localName && !this.pendingOperation; }
+  setForeground(value: boolean) { this.foreground = value; if (value && this.ready) this.startUsagePolling(); else this.stopUsagePolling(); }
+  dispose() { this.stopped = true; ++this.demoRun; clearTimeout(this.renderTimer); this.stopUsagePolling(); this.cancelDialog(); }
   private inputPath(value: string) {
     const text = value.trim();
     return resolve(this.host.cwd, ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'"))) ? text.slice(1, -1) : text);
@@ -131,12 +142,17 @@ export class Workbench {
     if (response.success !== true) throw new Error(str(response.error) || `${type} failed`);
     return object(response.data);
   }
-  async start() {
+  async start(preferences?: Pick<State, 'model' | 'provider' | 'thinking'>) {
     if (this.host.demo) {
       this.state.model = 'Demo model'; this.state.provider = 'Local preview';
       this.state.commands = builtinCommands; this.rememberTab(); this.ready = true; this.update(); return;
     }
-    const info = await this.request('get_state');
+    let info = await this.request('get_state');
+    if (preferences?.provider) {
+      await this.request('set_model', { provider: preferences.provider, modelId: preferences.model });
+      if (preferences.thinking) await this.request('set_thinking_level', { level: preferences.thinking });
+      info = await this.request('get_state');
+    }
     this.settings.autoCompaction = info.autoCompactionEnabled !== false;
     this.settings.steering = str(info.steeringMode) || 'one-at-a-time';
     this.settings.followUp = str(info.followUpMode) || 'one-at-a-time';
@@ -147,7 +163,7 @@ export class Workbench {
     this.rememberTab(); this.ready = true; this.startUsagePolling(); this.update();
   }
   private startUsagePolling() {
-    if (this.host.demo || this.stopped || this.surfacePaused || this.usageTimer) return;
+    if (this.host.demo || this.stopped || this.surfacePaused || !this.foreground || this.usageTimer) return;
     void this.refreshUsage();
     this.usageTimer = setInterval(() => { void this.refreshUsage(); }, 60_000);
   }
@@ -192,7 +208,8 @@ export class Workbench {
       } else this.extension(event);
     }
     if (event.type === 'agent_settled' && this.ready && !this.host.demo) this.safely(this.refresh(false));
-    this.update();
+    if (event.type === 'message_update' || event.type === 'tool_execution_update') this.scheduleUpdate();
+    else this.update();
   }
   disconnected(error: Error) { this.ready = false; this.cancelDialog(); this.state.busy = false; this.fail(error); }
   private async refresh(messages = true) {
@@ -284,7 +301,8 @@ export class Workbench {
     } catch (error) { this.ui.editor.setText(text); this.state.busy = wasBusy; throw error; }
   }
   async action(name: string) {
-    if (name.startsWith('close-tab:')) { await this.closeTab(name.slice('close-tab:'.length)); return; }
+    if (name.startsWith('tab-id:') && this.host.activateTab) { this.host.activateTab(name.slice(7)); return; }
+    if (name.startsWith('close-tab:')) { await (this.host.closeTab ? this.host.closeTab(name.slice('close-tab:'.length)) : this.closeTab(name.slice('close-tab:'.length))); return; }
     if (name.startsWith('tab:')) {
       const path = name.slice(4);
       const tab = this.state.tabs.find(item => item.path === path);
@@ -310,6 +328,7 @@ export class Workbench {
       this.state.busy = false; this.state.pendingCount = 0; this.state.notice = 'Cancelled'; return;
     }
     if (this.dialog || this.localName) throw new Error('Reply to or cancel the open dialog before another action.');
+    if (name === 'new' && this.host.openSession) { await this.host.openSession(); return; }
     if (['sidebar', 'details', 'thinking-display'].includes(name)) { this.ui.toggle(name === 'thinking-display' ? 'thinking' : name === 'sidebar' ? 'sidebar' : 'details'); return; }
     if (name === 'hotkeys') { this.ui.showText('Help & shortcuts', this.state.commands.map(x => `/${x.name}  ${x.description}`).join('\n') + '\n\nCtrl+P commands · Ctrl+X M model · Ctrl+X L sessions · Ctrl+X T theme · Ctrl+X H shortcuts\nCtrl+B sidebar · Ctrl+N new · Ctrl+T thinking level\nShift+Enter newline · PgUp/PgDn scroll · Esc cancel · Ctrl+C quit\n!command runs a shell command. @file attaches a text file.\nDrafts stay in the composer during a run. Ctrl+Enter steers; /followup queues after the run.'); return; }
     if (name === 'theme') {
@@ -326,7 +345,7 @@ export class Workbench {
       this.ui.showText(name === 'plan' ? 'Plan mode' : 'File undo / redo', name === 'plan' ? 'Pi RPC does not provide OpenCode’s enforced read-only Plan agent. Configure a Pi planning extension, or use /native to work with your installed extensions. Workbench will not label unrestricted tools as read-only.' : 'Pi conversation forks do not revert working-tree files. Use /fork for conversation history; manage file undo/redo through your version control tools. Workbench will not silently reset your ERP changes.'); return;
     }
     if (name === 'build') { this.state.notice = 'Pi uses its configured tools and permissions. There is no separate Workbench agent mode.'; return; }
-    if (this.state.busy && !['queue', 'followup', 'session'].includes(name)) throw new Error('Finish or cancel the active run before this action.');
+    if (this.state.busy && !['queue', 'followup', 'session', ...(this.host.openSession ? ['sessions', 'import'] : [])].includes(name)) throw new Error('Finish or cancel the active run before this action.');
     if (this.pendingOperation) throw new Error('A session action is still in progress.');
     if (['native', 'login', 'logout', 'share', 'bug', 'trust', 'scoped-models', 'reload', 'tree', 'changelog'].includes(name)) {
       if (this.host.demo) { this.ui.showText('Native Pi', 'This action opens your installed Pi TUI in live mode.'); return; }
@@ -424,6 +443,7 @@ export class Workbench {
     this.pendingOperation = true; try { await work(); } finally { this.pendingOperation = false; }
   }
   private async switchSession(path: string, name?: string) {
+    if (this.host.openSession) { await this.host.openSession(path, name); return; }
     if (!path || this.state.busy || this.pendingOperation || this.dialog || this.localName) throw new Error('Finish the current action before switching sessions.');
     if (!(await stat(path)).isFile()) throw new Error('Session path is not a file.');
     await this.sessionOperation(async () => {
