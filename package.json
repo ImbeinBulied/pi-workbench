@@ -1,0 +1,9 @@
+{
+  "name": "pi-workbench",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "bun src/main.ts", "demo": "bun src/main.ts --demo", "test": "bun test", "check": "tsc --noEmit", "preview": "bun scripts/capture.ts" },
+  "dependencies": { "@opentui/core": "0.6.6" },
+  "devDependencies": { "@types/bun": "latest", "typescript": "latest" }
+}
